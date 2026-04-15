@@ -20,6 +20,37 @@ const STYLES = [
   { value: "creative", label: "Kreatywny", desc: "Literacki, obrazowy" },
 ] as const;
 
+const PROCESSORS = [
+  { value: "summarize", label: "Streszczenie", desc: "Skróć do kluczowych punktów" },
+  { value: "expand", label: "Wydłużenie", desc: "Rozbuduj o szczegóły i kontekst" },
+  { value: "translate-en", label: "Tłumaczenie → EN", desc: "Przetłumacz na angielski" },
+  { value: "translate-pl", label: "Tłumaczenie → PL", desc: "Przetłumacz na polski" },
+  { value: "proofread", label: "Korekta", desc: "Popraw błędy, zachowaj treść" },
+] as const;
+
+const ALL_MODES = [...STYLES, ...PROCESSORS];
+
+function modeLabel(value: string): string {
+  return ALL_MODES.find((m) => m.value === value)?.label ?? value;
+}
+
+function buttonLabel(mode: string, loading: boolean): string {
+  if (loading) return "Przetwarzanie…";
+  switch (mode) {
+    case "summarize":
+      return "Streść";
+    case "expand":
+      return "Wydłuż";
+    case "translate-en":
+    case "translate-pl":
+      return "Przetłumacz";
+    case "proofread":
+      return "Popraw";
+    default:
+      return "Przepisz tekst";
+  }
+}
+
 const EXAMPLES = [
   {
     title: "Email biznesowy",
@@ -119,6 +150,29 @@ function Spinner() {
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
     </svg>
+  );
+}
+
+function ProofreadText({ text }: { text: string }) {
+  // Split on **...** and render matched parts as highlighted changes.
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return (
+    <p className="animate-fade-in whitespace-pre-wrap leading-relaxed">
+      {parts.map((part, i) => {
+        const match = part.match(/^\*\*([^*]+)\*\*$/);
+        if (match) {
+          return (
+            <mark
+              key={i}
+              className="bg-[var(--color-accent)]/20 text-[var(--color-foreground)] font-semibold rounded px-1"
+            >
+              {match[1]}
+            </mark>
+          );
+        }
+        return <span key={i}>{part}</span>;
+      })}
+    </p>
   );
 }
 
@@ -362,13 +416,13 @@ export default function Home() {
               )}
             </div>
 
-            {/* Style selector */}
+            {/* Mode selector */}
             <div className="flex flex-col gap-2">
               <label
                 htmlFor="style-select"
                 className="text-sm font-semibold uppercase tracking-wider text-[var(--color-muted)]"
               >
-                Styl przepisania
+                Tryb
               </label>
               <select
                 id="style-select"
@@ -376,11 +430,20 @@ export default function Home() {
                 onChange={(e) => setStyle(e.target.value)}
                 className="w-full rounded-xl bg-[var(--color-card)] border border-[var(--color-border)] px-4 py-3 text-[var(--color-foreground)] cursor-pointer transition-colors focus:border-[var(--color-accent)] appearance-none"
               >
-                {STYLES.map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label} — {s.desc}
-                  </option>
-                ))}
+                <optgroup label="Przepisz">
+                  {STYLES.map((s) => (
+                    <option key={s.value} value={s.value}>
+                      {s.label} — {s.desc}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Przetwórz">
+                  {PROCESSORS.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.label} — {p.desc}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
             </div>
 
@@ -392,28 +455,44 @@ export default function Home() {
             >
               {loading ? (
                 <>
-                  <Spinner /> Przetwarzanie…
+                  <Spinner /> {buttonLabel(style, true)}
                 </>
               ) : (
-                "Przepisz tekst"
+                buttonLabel(style, false)
               )}
             </button>
           </section>
 
           {/* Output panel */}
           <section className="flex flex-col gap-4">
-            <span className="text-sm font-semibold uppercase tracking-wider text-[var(--color-muted)]">
-              Wynik
-            </span>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-sm font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+                Wynik
+              </span>
+              {output && style === "summarize" && input.length > 0 && (
+                <span className="text-xs font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-2.5 py-1 rounded-full">
+                  Skrócono o {Math.max(0, Math.round((1 - output.length / input.length) * 100))}%
+                </span>
+              )}
+              {output && style === "proofread" && (
+                <span className="text-xs font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-2.5 py-1 rounded-full">
+                  Zmiany oznaczone kolorem
+                </span>
+              )}
+            </div>
 
             <div className="relative flex-1 min-h-[260px] rounded-xl bg-[var(--color-card)] border border-[var(--color-border)] px-4 py-3">
               {error ? (
                 <p className="animate-fade-in text-red-400">{error}</p>
               ) : output ? (
-                <p className="animate-fade-in whitespace-pre-wrap leading-relaxed">{output}</p>
+                style === "proofread" ? (
+                  <ProofreadText text={output} />
+                ) : (
+                  <p className="animate-fade-in whitespace-pre-wrap leading-relaxed">{output}</p>
+                )
               ) : (
                 <p className="text-[var(--color-muted)] italic">
-                  {loading ? "Przepisuję tekst…" : "Tutaj pojawi się przepisany tekst."}
+                  {loading ? "Przetwarzam tekst…" : "Tutaj pojawi się wynik."}
                 </p>
               )}
             </div>
@@ -443,7 +522,7 @@ export default function Home() {
 
             <div className="flex flex-col gap-3">
               {history.map((entry) => {
-                const styleLabel = STYLES.find((s) => s.value === entry.style)?.label ?? entry.style;
+                const styleLabel = modeLabel(entry.style);
                 return (
                   <button
                     key={entry.id}
