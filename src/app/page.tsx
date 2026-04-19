@@ -374,15 +374,13 @@ function StatsPanel({ inputText, outputText }: { inputText: string; outputText: 
 
   function StatRow({ label, inputVal, outputVal, suffix = "" }: { label: string; inputVal: number; outputVal: number; suffix?: string }) {
     return (
-      <div className="flex items-center justify-between py-1.5">
-        <span className="text-xs text-[var(--color-muted)]">{label}</span>
-        <div className="flex items-center gap-4 text-xs font-mono">
-          <span className="text-[var(--color-muted)] w-16 text-right"><AnimatedCounter value={inputVal} suffix={suffix} /></span>
-          <svg className="w-3 h-3 text-[var(--color-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
-          </svg>
-          <span className="text-[var(--color-foreground)] w-16 text-right"><AnimatedCounter value={outputVal} suffix={suffix} /></span>
-        </div>
+      <div className="grid grid-cols-[1fr_auto_1rem_auto] items-center gap-x-3 py-1.5">
+        <span className="text-xs text-[var(--color-muted)] min-w-0 truncate">{label}</span>
+        <span className="text-xs font-mono text-[var(--color-muted)] whitespace-nowrap text-right"><AnimatedCounter value={inputVal} suffix={suffix} /></span>
+        <svg className="w-3 h-3 text-[var(--color-muted)] mx-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+        </svg>
+        <span className="text-xs font-mono text-[var(--color-foreground)] whitespace-nowrap text-right"><AnimatedCounter value={outputVal} suffix={suffix} /></span>
       </div>
     );
   }
@@ -412,40 +410,34 @@ function StatsPanel({ inputText, outputText }: { inputText: string; outputText: 
         style={{ maxHeight: open ? "500px" : "0px", opacity: open ? 1 : 0 }}
       >
         <div className="px-4 pb-4 border-t border-[var(--color-border)]">
-          <div className="flex items-center justify-between pt-3 pb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+          <div className="grid grid-cols-[1fr_auto_1rem_auto] items-center gap-x-3 pt-3 pb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
             <span>Metryka</span>
-            <div className="flex items-center gap-4">
-              <span className="w-16 text-right">Przed</span>
-              <span className="w-3" />
-              <span className="w-16 text-right">Po</span>
-            </div>
+            <span className="text-right whitespace-nowrap">Przed</span>
+            <span />
+            <span className="text-right whitespace-nowrap">Po</span>
           </div>
           <StatRow label="Słowa" inputVal={inputStats.words} outputVal={outputStats.words} />
           <StatRow label="Zdania" inputVal={inputStats.sentences} outputVal={outputStats.sentences} />
           <StatRow label="Śr. dł. zdania" inputVal={inputStats.avgSentenceLen} outputVal={outputStats.avgSentenceLen} />
-          <div className="flex items-center justify-between py-1.5">
+          <div className="grid grid-cols-[1fr_auto_1rem_auto] items-center gap-x-3 py-1.5">
             <span className="text-xs text-[var(--color-muted)]">Czas czytania</span>
-            <div className="flex items-center gap-4 text-xs font-mono">
-              <span className="text-[var(--color-muted)] w-16 text-right">{formatTime(inputStats.readingTimeSeconds)}</span>
-              <svg className="w-3 h-3 text-[var(--color-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
-              </svg>
-              <span className="text-[var(--color-foreground)] w-16 text-right">{formatTime(outputStats.readingTimeSeconds)}</span>
-            </div>
+            <span className="text-xs font-mono text-[var(--color-muted)] whitespace-nowrap text-right">{formatTime(inputStats.readingTimeSeconds)}</span>
+            <svg className="w-3 h-3 text-[var(--color-muted)] mx-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+            </svg>
+            <span className="text-xs font-mono text-[var(--color-foreground)] whitespace-nowrap text-right">{formatTime(outputStats.readingTimeSeconds)}</span>
           </div>
-          <div className="flex items-center justify-between py-1.5">
+          <div className="grid grid-cols-[1fr_auto_1rem_auto] items-center gap-x-3 py-1.5">
             <span className="text-xs text-[var(--color-muted)]">Czytelność</span>
-            <div className="flex items-center gap-4 text-xs font-mono">
-              <span className={`w-16 text-right font-medium ${READABILITY_COLORS[inputStats.readability]}`}>
-                <span className={`${READABILITY_BG[inputStats.readability]} px-1.5 py-0.5 rounded`}>{inputStats.readability}</span>
-              </span>
-              <svg className="w-3 h-3 text-[var(--color-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
-              </svg>
-              <span className={`w-16 text-right font-medium ${READABILITY_COLORS[outputStats.readability]}`}>
-                <span className={`${READABILITY_BG[outputStats.readability]} px-1.5 py-0.5 rounded`}>{outputStats.readability}</span>
-              </span>
-            </div>
+            <span className={`text-xs font-medium whitespace-nowrap text-right ${READABILITY_COLORS[inputStats.readability]}`}>
+              <span className={`${READABILITY_BG[inputStats.readability]} px-1.5 py-0.5 rounded`}>{inputStats.readability}</span>
+            </span>
+            <svg className="w-3 h-3 text-[var(--color-muted)] mx-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+            </svg>
+            <span className={`text-xs font-medium whitespace-nowrap text-right ${READABILITY_COLORS[outputStats.readability]}`}>
+              <span className={`${READABILITY_BG[outputStats.readability]} px-1.5 py-0.5 rounded`}>{outputStats.readability}</span>
+            </span>
           </div>
         </div>
       </div>
