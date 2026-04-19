@@ -176,6 +176,157 @@ function ProofreadText({ text }: { text: string }) {
   );
 }
 
+// --------------- File upload & text extraction ---------------
+
+const ACCEPTED_TYPES: Record<string, string> = {
+  "application/pdf": "PDF",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX",
+  "text/plain": "TXT",
+  "text/markdown": "MD",
+  "text/csv": "CSV",
+  "text/html": "HTML",
+  "application/rtf": "RTF",
+  "image/png": "PNG",
+  "image/jpeg": "JPEG",
+  "image/webp": "WebP",
+  "image/gif": "GIF",
+  "image/bmp": "BMP",
+};
+
+const ACCEPT_STRING = Object.keys(ACCEPTED_TYPES).join(",") + ",.pdf,.docx,.txt,.md,.csv,.html,.rtf,.png,.jpg,.jpeg,.webp,.gif,.bmp";
+
+async function extractTextFromFile(file: File, onProgress?: (msg: string) => void): Promise<string> {
+  const type = file.type;
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+
+  if (type === "application/pdf" || ext === "pdf") {
+    onProgress?.("Odczytywanie PDF…");
+    const pdfjsLib = await import("pdfjs-dist");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+    const data = new Uint8Array(await file.arrayBuffer());
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const pages: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      onProgress?.(`Odczytywanie strony ${i}/${pdf.numPages}…`);
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      pages.push(content.items.map((item) => ("str" in item ? item.str : "")).join(" "));
+    }
+    return pages.join("\n\n");
+  }
+
+  if (type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || ext === "docx") {
+    onProgress?.("Odczytywanie dokumentu Word…");
+    const mammoth = await import("mammoth");
+    const buffer = await file.arrayBuffer();
+    const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+    return result.value;
+  }
+
+  if (type.startsWith("image/") || ["png", "jpg", "jpeg", "webp", "gif", "bmp"].includes(ext)) {
+    onProgress?.("Uruchamiam OCR (może potrwać)…");
+    const Tesseract = await import("tesseract.js");
+    const result = await Tesseract.recognize(file, "pol+eng", {
+      logger: (m: { status: string; progress: number }) => {
+        if (m.status === "recognizing text") {
+          onProgress?.(`OCR: ${Math.round(m.progress * 100)}%`);
+        }
+      },
+    });
+    return result.data.text;
+  }
+
+  if (type === "text/html" || ext === "html" || ext === "htm") {
+    onProgress?.("Odczytywanie HTML…");
+    const html = await file.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, "text/html");
+    return doc.body.textContent ?? "";
+  }
+
+  onProgress?.("Odczytywanie pliku…");
+  return file.text();
+}
+
+function FileUploader({ onText, disabled }: { onText: (text: string) => void; disabled?: boolean }) {
+  const [dragging, setDragging] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [extractError, setExtractError] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  async function handleFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    setExtracting(true);
+    setExtractError("");
+    setProgress("Rozpoczynam…");
+    try {
+      const text = await extractTextFromFile(file, setProgress);
+      const trimmed = text.trim();
+      if (!trimmed) {
+        setExtractError("Nie udało się wyodrębnić tekstu z pliku.");
+      } else {
+        onText(trimmed);
+      }
+    } catch (err) {
+      setExtractError(`Błąd odczytu: ${err instanceof Error ? err.message : "Nieznany błąd"}`);
+    } finally {
+      setExtracting(false);
+      setProgress("");
+    }
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragging(false);
+    if (!disabled && !extracting) handleFiles(e.dataTransfer.files);
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <input
+        ref={inputRef}
+        type="file"
+        accept={ACCEPT_STRING}
+        onChange={(e) => handleFiles(e.target.files)}
+        className="hidden"
+        disabled={disabled || extracting}
+      />
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        onClick={() => !extracting && !disabled && inputRef.current?.click()}
+        className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-4 text-sm transition-colors cursor-pointer ${
+          dragging
+            ? "border-[var(--color-accent)] bg-[var(--color-accent)]/5"
+            : "border-[var(--color-border)] hover:border-[var(--color-accent)]/40"
+        } ${(disabled || extracting) ? "opacity-40 cursor-not-allowed" : ""}`}
+      >
+        {extracting ? (
+          <div className="flex items-center gap-2 text-[var(--color-accent)]">
+            <Spinner />
+            <span>{progress}</span>
+          </div>
+        ) : (
+          <>
+            <svg className="w-5 h-5 text-[var(--color-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+            </svg>
+            <span className="text-[var(--color-muted)] text-center">
+              Przeciągnij plik lub kliknij — PDF, Word, TXT, obrazy (OCR)
+            </span>
+          </>
+        )}
+      </div>
+      {extractError && (
+        <p className="text-xs text-red-400">{extractError}</p>
+      )}
+    </div>
+  );
+}
+
 function Toast({ message, onDone }: { message: string; onDone: () => void }) {
   return (
     <div
@@ -996,6 +1147,8 @@ export default function Home() {
             >
               Tekst wejściowy
             </label>
+
+            <FileUploader onText={(text) => { setInput(text); setOutput(""); setError(""); }} disabled={loading} />
 
             <textarea
               id="input-text"
