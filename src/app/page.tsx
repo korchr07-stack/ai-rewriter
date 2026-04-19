@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 // --------------- Data ---------------
 
@@ -445,6 +445,315 @@ function StatsPanel({ inputText, outputText }: { inputText: string; outputText: 
   );
 }
 
+// --------------- Export helpers ---------------
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportTxt(input: string, output: string, mode: string) {
+  const date = new Date().toLocaleString("pl-PL");
+  const originalPreview = input.length > 200 ? input.slice(0, 200) + "…" : input;
+  const content = [
+    `AI Rewriter — Eksport`,
+    `Data: ${date}`,
+    `Tryb: ${modeLabel(mode)}`,
+    `Fragment oryginału: ${originalPreview}`,
+    ``,
+    `--- WYNIK ---`,
+    ``,
+    output,
+  ].join("\n");
+  downloadBlob(new Blob([content], { type: "text/plain;charset=utf-8" }), `rewriter-${mode}-${Date.now()}.txt`);
+}
+
+async function exportPdf(input: string, output: string, mode: string) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+
+  const pageW = doc.internal.pageSize.getWidth();
+  const margin = 20;
+  const maxW = pageW - margin * 2;
+
+  doc.setFontSize(18);
+  doc.text("AI Rewriter", margin, margin);
+
+  doc.setFontSize(10);
+  doc.setTextColor(120);
+  const date = new Date().toLocaleString("pl-PL");
+  doc.text(`Data: ${date}  |  Tryb: ${modeLabel(mode)}`, margin, margin + 8);
+
+  const originalPreview = input.length > 200 ? input.slice(0, 200) + "..." : input;
+  doc.text(`Oryginal: ${originalPreview}`, margin, margin + 14, { maxWidth: maxW });
+
+  doc.setDrawColor(200);
+  doc.line(margin, margin + 22, pageW - margin, margin + 22);
+
+  doc.setFontSize(12);
+  doc.setTextColor(0);
+  const lines = doc.splitTextToSize(output, maxW) as string[];
+  let y = margin + 30;
+  for (const line of lines) {
+    if (y > 280) {
+      doc.addPage();
+      y = margin;
+    }
+    doc.text(line, margin, y);
+    y += 6;
+  }
+
+  doc.save(`rewriter-${mode}-${Date.now()}.pdf`);
+}
+
+// --------------- CSV helpers ---------------
+
+const BULK_MAX = 20;
+
+function parseCsv(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(0, BULK_MAX);
+}
+
+function exportCsv(rows: { input: string; output: string }[]) {
+  const escape = (s: string) => `"${s.replace(/"/g, '""')}"`;
+  const header = "oryginał,wynik";
+  const body = rows.map((r) => `${escape(r.input)},${escape(r.output)}`).join("\n");
+  downloadBlob(
+    new Blob([`${header}\n${body}`], { type: "text/csv;charset=utf-8" }),
+    `rewriter-bulk-${Date.now()}.csv`,
+  );
+}
+
+// --------------- Bulk processor component ---------------
+
+interface BulkRow {
+  input: string;
+  output: string;
+  status: "pending" | "processing" | "done" | "error";
+  error?: string;
+}
+
+function BulkProcessor() {
+  const [rows, setRows] = useState<BulkRow[]>([]);
+  const [style, setStyle] = useState<string>("formal");
+  const [processing, setProcessing] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const texts = parseCsv(reader.result as string);
+      setRows(texts.map((t) => ({ input: t, output: "", status: "pending" })));
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  const handleProcess = useCallback(async () => {
+    if (rows.length === 0) return;
+    setProcessing(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    for (let i = 0; i < rows.length; i++) {
+      if (controller.signal.aborted) break;
+      setCurrent(i);
+      setRows((prev) => prev.map((r, j) => j === i ? { ...r, status: "processing" } : r));
+
+      try {
+        const res = await fetch("/api/rewrite", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: rows[i].input, style }),
+          signal: controller.signal,
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setRows((prev) => prev.map((r, j) => j === i ? { ...r, status: "error", error: data.error ?? "Błąd" } : r));
+        } else {
+          setRows((prev) => prev.map((r, j) => j === i ? { ...r, status: "done", output: data.result } : r));
+        }
+      } catch {
+        if (controller.signal.aborted) break;
+        setRows((prev) => prev.map((r, j) => j === i ? { ...r, status: "error", error: "Błąd połączenia" } : r));
+      }
+    }
+    setProcessing(false);
+    abortRef.current = null;
+  }, [rows, style]);
+
+  function handleCancel() {
+    abortRef.current?.abort();
+    setProcessing(false);
+  }
+
+  const doneCount = rows.filter((r) => r.status === "done").length;
+  const hasResults = doneCount > 0;
+
+  return (
+    <div className="flex flex-col gap-6">
+      {/* Upload + settings */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="flex flex-col gap-4">
+          <label className="text-sm font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+            Plik CSV (jedna kolumna tekstów)
+          </label>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,.txt"
+            onChange={handleFile}
+            className="hidden"
+          />
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--color-border)] hover:border-[var(--color-accent)]/40 px-6 py-8 text-sm text-[var(--color-muted)] hover:text-[var(--color-foreground)] transition-colors cursor-pointer"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+            </svg>
+            {rows.length > 0 ? `Załadowano ${rows.length} tekstów` : `Wybierz plik CSV (max ${BULK_MAX} wierszy)`}
+          </button>
+          {rows.length > 0 && (
+            <p className="text-xs text-[var(--color-muted)]">
+              {rows.length} {rows.length === 1 ? "tekst" : rows.length < 5 ? "teksty" : "tekstów"} do przetworzenia
+            </p>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-4">
+          <label htmlFor="bulk-style" className="text-sm font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+            Tryb (dla wszystkich)
+          </label>
+          <select
+            id="bulk-style"
+            value={style}
+            onChange={(e) => setStyle(e.target.value)}
+            disabled={processing}
+            className="w-full rounded-xl bg-[var(--color-card)] border border-[var(--color-border)] px-4 py-3 text-[var(--color-foreground)] cursor-pointer transition-colors focus:border-[var(--color-accent)] appearance-none disabled:opacity-40"
+          >
+            <optgroup label="Przepisz">
+              {STYLES.map((s) => (
+                <option key={s.value} value={s.value}>{s.label} — {s.desc}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Przetwórz">
+              {PROCESSORS.map((p) => (
+                <option key={p.value} value={p.value}>{p.label} — {p.desc}</option>
+              ))}
+            </optgroup>
+          </select>
+
+          <div className="flex gap-2 mt-2">
+            {!processing ? (
+              <button
+                onClick={handleProcess}
+                disabled={rows.length === 0 || rows.every((r) => r.status === "done")}
+                className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-6 py-3.5 transition-colors cursor-pointer"
+              >
+                Przepisz wszystkie ({rows.length})
+              </button>
+            ) : (
+              <button
+                onClick={handleCancel}
+                className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-red-500/80 hover:bg-red-500 text-white font-semibold px-6 py-3.5 transition-colors cursor-pointer"
+              >
+                Anuluj
+              </button>
+            )}
+            {hasResults && !processing && (
+              <button
+                onClick={() => exportCsv(rows.filter((r) => r.status === "done").map((r) => ({ input: r.input, output: r.output })))}
+                className="flex items-center gap-2 rounded-xl border border-[var(--color-border)] hover:border-[var(--color-accent)] px-4 py-3.5 text-sm transition-colors cursor-pointer"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+                CSV
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      {processing && (
+        <div className="animate-fade-in">
+          <div className="flex items-center justify-between mb-2 text-sm">
+            <span className="text-[var(--color-muted)]">Przetwarzam {current + 1}/{rows.length}…</span>
+            <span className="text-[var(--color-accent)] font-mono">{Math.round(((current + 1) / rows.length) * 100)}%</span>
+          </div>
+          <div className="h-2 rounded-full bg-[var(--color-border)] overflow-hidden">
+            <div
+              className="h-full rounded-full bg-[var(--color-accent)] transition-all duration-300"
+              style={{ width: `${((current + 1) / rows.length) * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Results */}
+      {rows.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {rows.map((row, i) => (
+            <div
+              key={i}
+              className={`rounded-xl border px-4 py-3 text-sm transition-all ${
+                row.status === "done"
+                  ? "border-emerald-500/30 bg-emerald-500/5"
+                  : row.status === "error"
+                  ? "border-red-500/30 bg-red-500/5"
+                  : row.status === "processing"
+                  ? "border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5"
+                  : "border-[var(--color-border)] bg-[var(--color-card)]"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <span className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-[var(--color-border)] text-[var(--color-muted)] text-xs font-mono">
+                  {row.status === "done" ? (
+                    <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                    </svg>
+                  ) : row.status === "error" ? (
+                    <svg className="w-3.5 h-3.5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  ) : row.status === "processing" ? (
+                    <Spinner />
+                  ) : (
+                    i + 1
+                  )}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[var(--color-muted)] truncate">{row.input}</p>
+                  {row.status === "done" && (
+                    <p className="text-[var(--color-foreground)] mt-1 whitespace-pre-wrap">{row.output}</p>
+                  )}
+                  {row.status === "error" && (
+                    <p className="text-red-400 mt-1">{row.error}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --------------- localStorage helpers ---------------
 
 const HISTORY_KEY = "ai-rewriter-history";
@@ -477,6 +786,7 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [showDiff, setShowDiff] = useState(false);
+  const [tab, setTab] = useState<"single" | "bulk">("single");
 
   const toolRef = useRef<HTMLDivElement>(null);
 
@@ -648,8 +958,35 @@ export default function Home() {
 
       {/* =================== TOOL =================== */}
       <main id="tool" ref={toolRef} className="flex-1 w-full max-w-6xl mx-auto px-6 py-16">
-        <h2 className="text-2xl font-bold text-center mb-10">Przepisz swój tekst</h2>
+        <h2 className="text-2xl font-bold text-center mb-6">Przepisz swój tekst</h2>
 
+        {/* Tab toggle */}
+        <div className="flex items-center justify-center gap-1 mb-10 bg-[var(--color-card)] rounded-xl p-1 max-w-xs mx-auto border border-[var(--color-border)]">
+          <button
+            onClick={() => setTab("single")}
+            className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+              tab === "single"
+                ? "bg-[var(--color-accent)] text-white"
+                : "text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
+            }`}
+          >
+            Pojedynczy
+          </button>
+          <button
+            onClick={() => setTab("bulk")}
+            className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+              tab === "bulk"
+                ? "bg-[var(--color-accent)] text-white"
+                : "text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
+            }`}
+          >
+            Masowy
+          </button>
+        </div>
+
+        {tab === "bulk" ? (
+          <BulkProcessor />
+        ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Input panel */}
           <section className="flex flex-col gap-4">
@@ -774,17 +1111,34 @@ export default function Home() {
             )}
 
             {output && (
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div />
+              <div className="animate-fade-in flex items-center justify-end gap-2 flex-wrap">
+                <button
+                  onClick={() => exportTxt(input, output, style)}
+                  className="flex items-center gap-2 rounded-xl border border-[var(--color-border)] hover:border-[var(--color-accent)] px-4 py-2 text-sm transition-colors cursor-pointer"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                  </svg>
+                  TXT
+                </button>
+                <button
+                  onClick={() => exportPdf(input, output, style)}
+                  className="flex items-center gap-2 rounded-xl border border-[var(--color-border)] hover:border-[var(--color-accent)] px-4 py-2 text-sm transition-colors cursor-pointer"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                  PDF
+                </button>
                 <button
                   onClick={handleCopy}
-                  className="animate-fade-in flex items-center gap-2 rounded-xl border border-[var(--color-border)] hover:border-[var(--color-accent)] px-4 py-2 text-sm transition-colors cursor-pointer"
+                  className="flex items-center gap-2 rounded-xl border border-[var(--color-border)] hover:border-[var(--color-accent)] px-4 py-2 text-sm transition-colors cursor-pointer"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <rect x="9" y="9" width="13" height="13" rx="2" />
                     <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
                   </svg>
-                  Kopiuj do schowka
+                  Kopiuj
                 </button>
               </div>
             )}
@@ -794,6 +1148,7 @@ export default function Home() {
             )}
           </section>
         </div>
+        )}
       </main>
 
       {/* =================== HISTORY =================== */}
