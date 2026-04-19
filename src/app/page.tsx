@@ -187,6 +187,272 @@ function Toast({ message, onDone }: { message: string; onDone: () => void }) {
   );
 }
 
+// --------------- Text analysis ---------------
+
+interface TextStats {
+  words: number;
+  sentences: number;
+  avgSentenceLen: number;
+  readingTimeSeconds: number;
+  readability: "prosty" | "średni" | "zaawansowany";
+}
+
+function analyzeText(text: string): TextStats {
+  const trimmed = text.trim();
+  if (!trimmed) return { words: 0, sentences: 0, avgSentenceLen: 0, readingTimeSeconds: 0, readability: "prosty" };
+
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  const sentences = trimmed.split(/[.!?]+/).filter((s) => s.trim().length > 0);
+  const wordCount = words.length;
+  const sentenceCount = Math.max(sentences.length, 1);
+  const avgSentenceLen = wordCount / sentenceCount;
+
+  const avgWordLen = words.reduce((sum, w) => sum + w.replace(/[^a-ząćęłńóśźżA-ZĄĆĘŁŃÓŚŹŻ]/gi, "").length, 0) / Math.max(wordCount, 1);
+
+  let readability: TextStats["readability"] = "prosty";
+  if (avgSentenceLen > 20 || avgWordLen > 7) readability = "zaawansowany";
+  else if (avgSentenceLen > 12 || avgWordLen > 5) readability = "średni";
+
+  return {
+    words: wordCount,
+    sentences: sentenceCount,
+    avgSentenceLen: Math.round(avgSentenceLen * 10) / 10,
+    readingTimeSeconds: Math.round((wordCount / 200) * 60),
+    readability,
+  };
+}
+
+const READABILITY_COLORS: Record<TextStats["readability"], string> = {
+  prosty: "text-emerald-400",
+  średni: "text-yellow-400",
+  zaawansowany: "text-red-400",
+};
+
+const READABILITY_BG: Record<TextStats["readability"], string> = {
+  prosty: "bg-emerald-400/10",
+  średni: "bg-yellow-400/10",
+  zaawansowany: "bg-red-400/10",
+};
+
+// --------------- Word-level diff ---------------
+
+interface DiffToken {
+  text: string;
+  type: "same" | "added" | "removed";
+}
+
+function wordDiff(a: string, b: string): { left: DiffToken[]; right: DiffToken[] } {
+  const wordsA = a.split(/(\s+)/);
+  const wordsB = b.split(/(\s+)/);
+
+  const n = wordsA.length;
+  const m = wordsB.length;
+
+  const lcs: number[][] = [];
+
+  for (let i = 0; i <= n; i++) {
+    lcs[i] = new Array(m + 1).fill(0);
+  }
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      if (wordsA[i - 1] === wordsB[j - 1]) {
+        lcs[i][j] = lcs[i - 1][j - 1] + 1;
+      } else {
+        lcs[i][j] = Math.max(lcs[i - 1][j], lcs[i][j - 1]);
+      }
+    }
+  }
+
+  const left: DiffToken[] = [];
+  const right: DiffToken[] = [];
+  let i = n, j = m;
+
+  const leftStack: DiffToken[] = [];
+  const rightStack: DiffToken[] = [];
+
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && wordsA[i - 1] === wordsB[j - 1]) {
+      leftStack.push({ text: wordsA[i - 1], type: "same" });
+      rightStack.push({ text: wordsB[j - 1], type: "same" });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || lcs[i][j - 1] >= lcs[i - 1][j])) {
+      rightStack.push({ text: wordsB[j - 1], type: "added" });
+      j--;
+    } else {
+      leftStack.push({ text: wordsA[i - 1], type: "removed" });
+      i--;
+    }
+  }
+
+  leftStack.reverse().forEach((t) => left.push(t));
+  rightStack.reverse().forEach((t) => right.push(t));
+
+  return { left, right };
+}
+
+// --------------- Animated counter ---------------
+
+function AnimatedCounter({ value, suffix = "", duration = 800 }: { value: number; suffix?: string; duration?: number }) {
+  const [display, setDisplay] = useState(0);
+  const prevValue = useRef(0);
+
+  useEffect(() => {
+    const start = prevValue.current;
+    const end = value;
+    if (start === end) { setDisplay(end); return; }
+
+    const startTime = performance.now();
+    let raf: number;
+
+    function tick(now: number) {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setDisplay(Math.round(start + (end - start) * eased));
+      if (progress < 1) {
+        raf = requestAnimationFrame(tick);
+      } else {
+        prevValue.current = end;
+      }
+    }
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value, duration]);
+
+  return <>{display}{suffix}</>;
+}
+
+// --------------- DiffView component ---------------
+
+function DiffView({ original, result }: { original: string; result: string }) {
+  const { left, right } = wordDiff(original, result);
+
+  function renderTokens(tokens: DiffToken[]) {
+    return tokens.map((t, i) => {
+      if (t.type === "removed") {
+        return <span key={i} className="bg-red-500/20 text-red-300 line-through rounded px-0.5">{t.text}</span>;
+      }
+      if (t.type === "added") {
+        return <span key={i} className="bg-emerald-500/20 text-emerald-300 rounded px-0.5">{t.text}</span>;
+      }
+      return <span key={i}>{t.text}</span>;
+    });
+  }
+
+  return (
+    <div className="animate-fade-in grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <span className="text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)] mb-2 block">Oryginał</span>
+        <div className="rounded-lg bg-[var(--color-background)] border border-[var(--color-border)] px-3 py-2.5 text-sm whitespace-pre-wrap leading-relaxed max-h-[300px] overflow-y-auto">
+          {renderTokens(left)}
+        </div>
+      </div>
+      <div>
+        <span className="text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)] mb-2 block">Wynik</span>
+        <div className="rounded-lg bg-[var(--color-background)] border border-[var(--color-border)] px-3 py-2.5 text-sm whitespace-pre-wrap leading-relaxed max-h-[300px] overflow-y-auto">
+          {renderTokens(right)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --------------- TextStats panel ---------------
+
+function StatsPanel({ inputText, outputText }: { inputText: string; outputText: string }) {
+  const [open, setOpen] = useState(false);
+  const inputStats = analyzeText(inputText);
+  const outputStats = analyzeText(outputText);
+
+  function formatTime(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`;
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return s > 0 ? `${m}min ${s}s` : `${m}min`;
+  }
+
+  function StatRow({ label, inputVal, outputVal, suffix = "" }: { label: string; inputVal: number; outputVal: number; suffix?: string }) {
+    return (
+      <div className="flex items-center justify-between py-1.5">
+        <span className="text-xs text-[var(--color-muted)]">{label}</span>
+        <div className="flex items-center gap-4 text-xs font-mono">
+          <span className="text-[var(--color-muted)] w-16 text-right"><AnimatedCounter value={inputVal} suffix={suffix} /></span>
+          <svg className="w-3 h-3 text-[var(--color-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+          </svg>
+          <span className="text-[var(--color-foreground)] w-16 text-right"><AnimatedCounter value={outputVal} suffix={suffix} /></span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="animate-fade-in rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-[var(--color-muted)] hover:text-[var(--color-foreground)] transition-colors cursor-pointer"
+      >
+        <div className="flex items-center gap-2">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+          </svg>
+          Statystyki tekstu
+        </div>
+        <svg
+          className={`w-4 h-4 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+        </svg>
+      </button>
+
+      <div
+        className="overflow-hidden transition-all duration-300 ease-in-out"
+        style={{ maxHeight: open ? "500px" : "0px", opacity: open ? 1 : 0 }}
+      >
+        <div className="px-4 pb-4 border-t border-[var(--color-border)]">
+          <div className="flex items-center justify-between pt-3 pb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+            <span>Metryka</span>
+            <div className="flex items-center gap-4">
+              <span className="w-16 text-right">Przed</span>
+              <span className="w-3" />
+              <span className="w-16 text-right">Po</span>
+            </div>
+          </div>
+          <StatRow label="Słowa" inputVal={inputStats.words} outputVal={outputStats.words} />
+          <StatRow label="Zdania" inputVal={inputStats.sentences} outputVal={outputStats.sentences} />
+          <StatRow label="Śr. dł. zdania" inputVal={inputStats.avgSentenceLen} outputVal={outputStats.avgSentenceLen} />
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-xs text-[var(--color-muted)]">Czas czytania</span>
+            <div className="flex items-center gap-4 text-xs font-mono">
+              <span className="text-[var(--color-muted)] w-16 text-right">{formatTime(inputStats.readingTimeSeconds)}</span>
+              <svg className="w-3 h-3 text-[var(--color-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+              </svg>
+              <span className="text-[var(--color-foreground)] w-16 text-right">{formatTime(outputStats.readingTimeSeconds)}</span>
+            </div>
+          </div>
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-xs text-[var(--color-muted)]">Czytelność</span>
+            <div className="flex items-center gap-4 text-xs font-mono">
+              <span className={`w-16 text-right font-medium ${READABILITY_COLORS[inputStats.readability]}`}>
+                <span className={`${READABILITY_BG[inputStats.readability]} px-1.5 py-0.5 rounded`}>{inputStats.readability}</span>
+              </span>
+              <svg className="w-3 h-3 text-[var(--color-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+              </svg>
+              <span className={`w-16 text-right font-medium ${READABILITY_COLORS[outputStats.readability]}`}>
+                <span className={`${READABILITY_BG[outputStats.readability]} px-1.5 py-0.5 rounded`}>{outputStats.readability}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --------------- localStorage helpers ---------------
 
 const HISTORY_KEY = "ai-rewriter-history";
@@ -218,6 +484,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [showDiff, setShowDiff] = useState(false);
 
   const toolRef = useRef<HTMLDivElement>(null);
 
@@ -232,6 +499,7 @@ export default function Home() {
     setLoading(true);
     setOutput("");
     setError("");
+    setShowDiff(false);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
@@ -287,6 +555,7 @@ export default function Home() {
     setStyle(exampleStyle);
     setOutput("");
     setError("");
+    setShowDiff(false);
     toolRef.current?.scrollIntoView({ behavior: "smooth" });
   }
 
@@ -295,6 +564,7 @@ export default function Home() {
     setOutput(entry.output);
     setStyle(entry.style);
     setError("");
+    setShowDiff(false);
     toolRef.current?.scrollIntoView({ behavior: "smooth" });
   }
 
@@ -469,45 +739,66 @@ export default function Home() {
               <span className="text-sm font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                 Wynik
               </span>
-              {output && style === "summarize" && input.length > 0 && (
-                <span className="text-xs font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-2.5 py-1 rounded-full">
-                  Skrócono o {Math.max(0, Math.round((1 - output.length / input.length) * 100))}%
-                </span>
-              )}
-              {output && style === "proofread" && (
-                <span className="text-xs font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-2.5 py-1 rounded-full">
-                  Zmiany oznaczone kolorem
-                </span>
-              )}
+              <div className="flex items-center gap-2 flex-wrap">
+                {output && style === "summarize" && input.length > 0 && (
+                  <span className="text-xs font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-2.5 py-1 rounded-full">
+                    Skrócono o {Math.max(0, Math.round((1 - output.length / input.length) * 100))}%
+                  </span>
+                )}
+                {output && style === "proofread" && !showDiff && (
+                  <span className="text-xs font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-2.5 py-1 rounded-full">
+                    Zmiany oznaczone kolorem
+                  </span>
+                )}
+                {output && input && (
+                  <button
+                    onClick={() => setShowDiff((d) => !d)}
+                    className="text-xs font-medium px-2.5 py-1 rounded-full border transition-colors cursor-pointer border-[var(--color-border)] hover:border-[var(--color-accent)] text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
+                  >
+                    {showDiff ? "Pokaż tylko wynik" : "Pokaż porównanie"}
+                  </button>
+                )}
+              </div>
             </div>
 
-            <div className="relative flex-1 min-h-[260px] rounded-xl bg-[var(--color-card)] border border-[var(--color-border)] px-4 py-3">
-              {error ? (
-                <p className="animate-fade-in text-red-400">{error}</p>
-              ) : output ? (
-                style === "proofread" ? (
-                  <ProofreadText text={output} />
+            {showDiff && output && input ? (
+              <DiffView original={input} result={output} />
+            ) : (
+              <div className="relative flex-1 min-h-[260px] rounded-xl bg-[var(--color-card)] border border-[var(--color-border)] px-4 py-3">
+                {error ? (
+                  <p className="animate-fade-in text-red-400">{error}</p>
+                ) : output ? (
+                  style === "proofread" ? (
+                    <ProofreadText text={output} />
+                  ) : (
+                    <p className="animate-fade-in whitespace-pre-wrap leading-relaxed">{output}</p>
+                  )
                 ) : (
-                  <p className="animate-fade-in whitespace-pre-wrap leading-relaxed">{output}</p>
-                )
-              ) : (
-                <p className="text-[var(--color-muted)] italic">
-                  {loading ? "Przetwarzam tekst…" : "Tutaj pojawi się wynik."}
-                </p>
-              )}
-            </div>
+                  <p className="text-[var(--color-muted)] italic">
+                    {loading ? "Przetwarzam tekst…" : "Tutaj pojawi się wynik."}
+                  </p>
+                )}
+              </div>
+            )}
 
             {output && (
-              <button
-                onClick={handleCopy}
-                className="animate-fade-in self-end flex items-center gap-2 rounded-xl border border-[var(--color-border)] hover:border-[var(--color-accent)] px-4 py-2 text-sm transition-colors cursor-pointer"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <rect x="9" y="9" width="13" height="13" rx="2" />
-                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-                </svg>
-                Kopiuj do schowka
-              </button>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div />
+                <button
+                  onClick={handleCopy}
+                  className="animate-fade-in flex items-center gap-2 rounded-xl border border-[var(--color-border)] hover:border-[var(--color-accent)] px-4 py-2 text-sm transition-colors cursor-pointer"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                  </svg>
+                  Kopiuj do schowka
+                </button>
+              </div>
+            )}
+
+            {output && input && (
+              <StatsPanel inputText={input} outputText={output} />
             )}
           </section>
         </div>

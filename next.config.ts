@@ -1,9 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  turbopack: {
-    root: process.cwd(),
-  },
+  ...(process.env.NODE_ENV === "development" && {
+    turbopack: {
+      root: process.cwd(),
+    },
+  }),
 };
 
 export default nextConfig;
