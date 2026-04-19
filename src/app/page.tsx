@@ -202,9 +202,12 @@ async function extractTextFromFile(file: File, onProgress?: (msg: string) => voi
   if (type === "application/pdf" || ext === "pdf") {
     onProgress?.("Odczytywanie PDF…");
     const pdfjsLib = await import("pdfjs-dist");
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
     const data = new Uint8Array(await file.arrayBuffer());
-    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const pdf = await pdfjsLib.getDocument({
+      data,
+      standardFontDataUrl: "/standard_fonts/",
+    }).promise;
     const pages: string[] = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       onProgress?.(`Odczytywanie strony ${i}/${pdf.numPages}…`);
