@@ -908,9 +908,38 @@ function BulkProcessor() {
   );
 }
 
+// --------------- Tooltip ---------------
+
+function Tooltip({ text, children }: { text: string; children: React.ReactNode }) {
+  return (
+    <span className="relative group/tip">
+      {children}
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 rounded-lg bg-[var(--color-foreground)] text-[var(--color-background)] text-xs whitespace-nowrap opacity-0 group-hover/tip:opacity-100 transition-opacity z-50">
+        {text}
+      </span>
+    </span>
+  );
+}
+
+// --------------- Loading skeleton ---------------
+
+function OutputSkeleton() {
+  return (
+    <div className="animate-pulse flex flex-col gap-3 px-4 py-3">
+      <div className="h-3 bg-[var(--color-border)] rounded w-full" />
+      <div className="h-3 bg-[var(--color-border)] rounded w-[90%]" />
+      <div className="h-3 bg-[var(--color-border)] rounded w-[95%]" />
+      <div className="h-3 bg-[var(--color-border)] rounded w-[70%]" />
+      <div className="h-3 bg-[var(--color-border)] rounded w-[85%]" />
+      <div className="h-3 bg-[var(--color-border)] rounded w-[60%]" />
+    </div>
+  );
+}
+
 // --------------- localStorage helpers ---------------
 
 const HISTORY_KEY = "ai-rewriter-history";
+const STYLE_KEY = "ai-rewriter-style";
 const MAX_HISTORY = 5;
 
 function loadHistory(): HistoryEntry[] {
@@ -946,7 +975,32 @@ export default function Home() {
 
   useEffect(() => {
     setHistory(loadHistory());
+    try {
+      const saved = localStorage.getItem(STYLE_KEY);
+      if (saved && ALL_MODES.some((m) => m.value === saved)) setStyle(saved);
+    } catch {}
   }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(STYLE_KEY, style); } catch {}
+  }, [style]);
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        if (input.trim().length > 0 && !loading && input.length <= MAX_TEXT_LENGTH) {
+          handleRewrite();
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "c" || e.key === "C")) {
+        e.preventDefault();
+        if (output) handleCopy();
+      }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  });
 
   const canSubmit = input.trim().length > 0 && !loading && input.length <= MAX_TEXT_LENGTH;
 
@@ -1042,13 +1096,13 @@ export default function Home() {
         {/* Glow */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[320px] bg-[var(--color-accent)] opacity-[0.07] blur-[120px] rounded-full pointer-events-none" />
 
-        <div className="relative max-w-5xl mx-auto px-6 pt-20 pb-16 text-center">
+        <div className="relative max-w-5xl mx-auto px-4 sm:px-6 pt-14 sm:pt-20 pb-12 sm:pb-16 text-center">
           {/* Badge */}
           <span className="inline-block mb-6 text-xs font-semibold tracking-widest uppercase text-[var(--color-accent)] border border-[var(--color-accent)]/20 rounded-full px-4 py-1.5 bg-[var(--color-accent)]/5">
             Powered by Claude AI
           </span>
 
-          <h1 className="text-5xl sm:text-6xl font-bold tracking-tight leading-[1.1]">
+          <h1 className="text-3xl sm:text-5xl md:text-6xl font-bold tracking-tight leading-[1.1]">
             <span className="bg-gradient-to-r from-[var(--color-accent)] via-purple-400 to-pink-400 bg-clip-text text-transparent animate-gradient">
               Przepisz tekst
             </span>
@@ -1187,14 +1241,14 @@ export default function Home() {
               >
                 <optgroup label="Przepisz">
                   {STYLES.map((s) => (
-                    <option key={s.value} value={s.value}>
+                    <option key={s.value} value={s.value} title={s.desc}>
                       {s.label} — {s.desc}
                     </option>
                   ))}
                 </optgroup>
                 <optgroup label="Przetwórz">
                   {PROCESSORS.map((p) => (
-                    <option key={p.value} value={p.value}>
+                    <option key={p.value} value={p.value} title={p.desc}>
                       {p.label} — {p.desc}
                     </option>
                   ))}
@@ -1202,20 +1256,35 @@ export default function Home() {
               </select>
             </div>
 
-            {/* Submit */}
-            <button
-              onClick={handleRewrite}
-              disabled={!canSubmit}
-              className="mt-2 flex items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-6 py-3.5 transition-colors cursor-pointer"
-            >
-              {loading ? (
-                <>
-                  <Spinner /> {buttonLabel(style, true)}
-                </>
-              ) : (
-                buttonLabel(style, false)
+            {/* Submit + Clear */}
+            <div className="mt-2 flex gap-2">
+              <Tooltip text="Ctrl+Enter">
+                <button
+                  onClick={handleRewrite}
+                  disabled={!canSubmit}
+                  className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-6 py-3.5 transition-colors cursor-pointer"
+                >
+                  {loading ? (
+                    <>
+                      <Spinner /> {buttonLabel(style, true)}
+                    </>
+                  ) : (
+                    buttonLabel(style, false)
+                  )}
+                </button>
+              </Tooltip>
+              {(input || output) && (
+                <button
+                  onClick={() => { setInput(""); setOutput(""); setError(""); setShowDiff(false); }}
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-border)] hover:border-red-500/50 hover:text-red-400 px-4 py-3.5 text-sm text-[var(--color-muted)] transition-colors cursor-pointer"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  Wyczyść
+                </button>
               )}
-            </button>
+            </div>
           </section>
 
           {/* Output panel */}
@@ -1258,10 +1327,10 @@ export default function Home() {
                   ) : (
                     <p className="animate-fade-in whitespace-pre-wrap leading-relaxed">{output}</p>
                   )
+                ) : loading ? (
+                  <OutputSkeleton />
                 ) : (
-                  <p className="text-[var(--color-muted)] italic">
-                    {loading ? "Przetwarzam tekst…" : "Tutaj pojawi się wynik."}
-                  </p>
+                  <p className="text-[var(--color-muted)] italic">Tutaj pojawi się wynik.</p>
                 )}
               </div>
             )}
@@ -1286,16 +1355,18 @@ export default function Home() {
                   </svg>
                   PDF
                 </button>
-                <button
-                  onClick={handleCopy}
-                  className="flex items-center gap-2 rounded-xl border border-[var(--color-border)] hover:border-[var(--color-accent)] px-4 py-2 text-sm transition-colors cursor-pointer"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <rect x="9" y="9" width="13" height="13" rx="2" />
-                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-                  </svg>
-                  Kopiuj
-                </button>
+                <Tooltip text="Ctrl+Shift+C">
+                  <button
+                    onClick={handleCopy}
+                    className="flex items-center gap-2 rounded-xl border border-[var(--color-border)] hover:border-[var(--color-accent)] px-4 py-2 text-sm transition-colors cursor-pointer"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <rect x="9" y="9" width="13" height="13" rx="2" />
+                      <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                    </svg>
+                    Kopiuj
+                  </button>
+                </Tooltip>
               </div>
             )}
 
@@ -1348,28 +1419,6 @@ export default function Home() {
           </div>
         </section>
       )}
-
-      {/* =================== FOOTER =================== */}
-      <footer className="border-t border-[var(--color-border)] bg-[var(--color-surface)]">
-        <div className="max-w-5xl mx-auto px-6 py-12">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
-            <div>
-              <span className="text-lg font-bold bg-gradient-to-r from-[var(--color-accent)] to-purple-400 bg-clip-text text-transparent">
-                AI Rewriter
-              </span>
-              <p className="text-xs text-[var(--color-muted)] mt-1">Przepisuj teksty w wybranym stylu z AI</p>
-            </div>
-            <nav className="flex items-center gap-8">
-              <a href="#" className="text-sm text-[var(--color-muted)] hover:text-[var(--color-foreground)] transition-colors">O nas</a>
-              <a href="#" className="text-sm text-[var(--color-muted)] hover:text-[var(--color-foreground)] transition-colors">Cennik</a>
-              <a href="#" className="text-sm text-[var(--color-muted)] hover:text-[var(--color-foreground)] transition-colors">Kontakt</a>
-            </nav>
-          </div>
-          <div className="mt-8 pt-6 border-t border-[var(--color-border)] text-center text-xs text-[var(--color-muted)]">
-            &copy; 2026 AI Rewriter. Wszelkie prawa zastrzeżone.
-          </div>
-        </div>
-      </footer>
 
       {/* Toast */}
       {toast && <Toast message={toast} onDone={() => setToast("")} />}
